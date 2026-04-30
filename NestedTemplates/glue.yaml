@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Glue Streaming ETL Job - MSK to S3
+
+########################################
+# Parameters
+########################################
+Parameters:
+
+  pSystemName:
+    Type: String
+
+  pSystemNameLower:
+    Type: String
+
+  pSystemNameUnderScore:
+    Type: String
+
+  pAvailabitityZone1a:
+    Type: String
+
+  pTopicName:
+    Type: String
+
+  pMSKBootstrapServers:
+    Type: String
+
+  pS3BucketNameForResource:
+    Type: String
+
+########################################
+# Resources
+########################################
+Resources:
+
+  #-------------------------------------#
+  # S3 Bucket
+  #-------------------------------------#
+  rS3BucketForGlue:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub ${pSystemNameLower}-s3-output-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemNameLower}-s3-output-${AWS::AccountId}
+
+  #-------------------------------------#
+  # IAM Policy / Role for Glue Job
+  #-------------------------------------#
+  rIAMPolicyForGlueJob:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:*
+            Resource:
+              - !GetAtt rS3BucketForGlue.Arn
+              - !Sub ${rS3BucketForGlue.Arn}/*
+              - !Sub arn:${AWS::Partition}:s3:::${pS3BucketNameForResource}
+              - !Sub arn:${AWS::Partition}:s3:::${pS3BucketNameForResource}/*
+          - Effect: Allow
+            Action:
+              - kafka-cluster:*
+              - kafka:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:cluster/*
+              - !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:topic/*
+              - !Sub arn:${AWS::Partition}:kafka:${AWS::Region}:${AWS::AccountId}:group/*
+  
+  rIAMRoleForGlueJob:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${pSystemName}-Role-GlueStreamingJob
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSGlueServiceRole
+        - !Ref rIAMPolicyForGlueJob
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-Role-GlueStreamingJob
+
+  #-------------------------------------#
+  # Glue Connection (Kafka / MSK)
+  #-------------------------------------#
+  rGlueConnectionForMSK:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: !Sub ${pSystemName}-Connection-MSK
+        ConnectionType: KAFKA
+        ConnectionProperties:
+          KAFKA_BOOTSTRAP_SERVERS: !Ref pMSKBootstrapServers
+        PhysicalConnectionRequirements:
+          SubnetId: !ImportValue NetworkStack-PrivateSubnet1aId
+          SecurityGroupIdList:
+            - !ImportValue NetworkStack-SGForGlueJobId
+          AvailabilityZone: !Ref pAvailabitityZone1a
+
+  #-------------------------------------#
+  # Glue Database
+  #-------------------------------------#
+  rGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub ${pSystemNameUnderScore}_database
+
+  #-------------------------------------#
+  # Glue Table (Kafka / MSK Source)
+  #-------------------------------------#
+  rGlueTableForMSK:
+    Type: AWS::Glue::Table
+    DependsOn: rGlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Sub ${pSystemNameUnderScore}_database
+      TableInput:
+        Name: !Sub ${pSystemNameUnderScore}_table
+        Parameters:
+          classification: json
+          connectionName: !Sub ${pSystemName}-Connection-MSK
+        StorageDescriptor:
+          Columns:
+            - Name: store_id
+              Type: string
+            - Name: amount
+              Type: int
+            - Name: timestamp
+              Type: timestamp
+          Location: !Ref pTopicName
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          Parameters:
+            typeOfData: kafka
+            topicName: !Ref pTopicName
+            connectionName: !Sub ${pSystemName}-Connection-MSK
+
+  rGlueTableForS3Output:
+    Type: AWS::Glue::Table
+    DependsOn: rGlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Sub ${pSystemNameUnderScore}_database
+      TableInput:
+        Name: !Sub ${pSystemNameUnderScore}_output_table
+        Parameters:
+          classification: parquet
+        StorageDescriptor:
+          Columns:
+            - Name: store_id
+              Type: string
+            - Name: amount
+              Type: int
+            - Name: timestamp
+              Type: timestamp
+          Location: !Sub s3://${rS3BucketForGlue}/output/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+            Parameters:
+              serialization.format: 1
+
+  #-------------------------------------#
+  # Glue Streaming Job
+  #-------------------------------------#
+  rGlueStreamingJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub ${pSystemName}-GlueStreamingJob
+      Role: !GetAtt rIAMRoleForGlueJob.Arn
+      GlueVersion: "5.1"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Command:
+        Name: gluestreaming
+        ScriptLocation: !Sub s3://${pS3BucketNameForResource}/PythonCodes/streaming_etl_glue.py
+        PythonVersion: "3"
+      Connections:
+        Connections:
+          - !Ref rGlueConnectionForMSK
+      DefaultArguments:
+        "--enable-continuous-cloudwatch-log": "true"
+        "--enable-job-insights": "true"
+        "--enable-metrics": "true"
+        "--extra-jars": !Sub s3://${pS3BucketNameForResource}/aws-msk-iam-auth-2.3.0-all.jar
+      Tags:
+        Name: !Sub ${pSystemName}-GlueStreamingJob
+
+########################################
+# Outputs
+########################################

@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Root Stack for MSK Kafka Client Infrastructure
+
+########################################
+# Parameters
+########################################
+Parameters:
+  pS3BucketName:
+    Type: String
+
+########################################
+# Resources
+########################################
+Resources:
+
+  ########## Network Stack ##########
+  rNetworkStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub https://${pS3BucketName}.s3.${AWS::Region}.amazonaws.com/NestedTemplates/network.yaml
+      Fn::Transform:
+        Name: AWS::Include
+        Parameters:
+          Location: !Sub s3://${pS3BucketName}/NestedTemplates/network.json
+
+  ########## MSK Stack ##########
+  rMSKStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    DependsOn: rNetworkStack
+    Properties:
+      TemplateURL: !Sub https://${pS3BucketName}.s3.${AWS::Region}.amazonaws.com/NestedTemplates/msk.yaml
+      Fn::Transform:
+        Name: AWS::Include
+        Parameters:
+          Location: !Sub s3://${pS3BucketName}/NestedTemplates/msk.json

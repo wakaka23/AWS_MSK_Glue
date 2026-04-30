@@ -1,0 +1,7 @@
+{
+  "Parameters": {
+    "pSystemName": "DataAnalyze",
+    "pInstanceType": "t3.medium",
+    "pAmi": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+  }
+}

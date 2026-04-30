@@ -1,0 +1,11 @@
+{
+  "Parameters": {
+    "pSystemName": "DataAnalyze",
+    "pSystemNameLower": "data-analyze",
+    "pSystemNameUnderScore": "data_analyze",
+    "pAvailabitityZone1a": "ap-northeast-1a",
+    "pTopicName": "test-topic",
+    "pMSKBootstrapServers": "<BootStrapServersのURL>",
+    "pS3BucketNameForResource": "test-s3bucket"
+  }
+}

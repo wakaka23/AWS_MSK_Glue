@@ -1,0 +1,11 @@
+{
+  "Parameters": {
+    "pSystemName": "DataAnalyze",
+    "pCidrBlockVpc": "10.0.0.0/16",
+    "pCidrBlockPrivateSubnet1a": "10.0.0.0/24",
+    "pCidrBlockPrivateSubnet1c": "10.0.1.0/24",
+    "pCidrBlockPublicSubnet1a": "10.0.2.0/24",
+    "pAvailabitityZone1a": "ap-northeast-1a",
+    "pAvailabitityZone1c": "ap-northeast-1c"
+  }
+}

@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Root Stack for MSK Kafka Client Infrastructure
+
+########################################
+# Parameters
+########################################
+Parameters:
+  pS3BucketName:
+    Type: String
+
+########################################
+# Resources
+########################################
+Resources:
+
+  ########## Glue Stack ##########
+  rGlueStack:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub https://${pS3BucketName}.s3.${AWS::Region}.amazonaws.com/NestedTemplates/glue.yaml
+      Fn::Transform:
+        Name: AWS::Include
+        Parameters:
+          Location: !Sub s3://${pS3BucketName}/NestedTemplates/glue.json

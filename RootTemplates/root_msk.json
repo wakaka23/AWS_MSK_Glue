@@ -1,0 +1,5 @@
+{
+  "Parameters": {
+    "pS3BucketName": "test-s3bucket"
+  }
+}

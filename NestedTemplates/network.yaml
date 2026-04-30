@@ -1,0 +1,347 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Network Resources
+
+######################################## Parameters ########################################
+Parameters:
+
+  pSystemName:
+    Type: String
+
+  pCidrBlockVpc:
+    Type: String
+
+  pCidrBlockPrivateSubnet1a:
+    Type: String
+
+  pCidrBlockPrivateSubnet1c:
+    Type: String
+
+  pCidrBlockPublicSubnet1a:
+    Type: String
+
+  pAvailabitityZone1a:
+    Type: String
+
+  pAvailabitityZone1c:
+    Type: String
+
+######################################## Resources ########################################
+Resources:
+
+  #-------------------------------------#
+  # VPC and Subnets
+  #-------------------------------------#
+  rVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref pCidrBlockVpc
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-Vpc
+
+  rPrivateSubnet1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pCidrBlockPrivateSubnet1a
+      AvailabilityZone: !Ref pAvailabitityZone1a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-PrivateSubnet-1a
+
+  rPrivateSubnet1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pCidrBlockPrivateSubnet1c
+      AvailabilityZone: !Ref pAvailabitityZone1c
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-PrivateSubnet-1c
+  
+  rPublicSubnet1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref rVPC
+      CidrBlock: !Ref pCidrBlockPublicSubnet1a
+      AvailabilityZone: !Ref pAvailabitityZone1a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-PublicSubnet-1a
+
+  #-------------------------------------#
+  # Internet Gateway, NAT Gateway
+  #-------------------------------------#
+  rInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-InternetGateway
+
+  rInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref rVPC
+      InternetGatewayId: !Ref rInternetGateway
+
+  rElasticIpForNatGateway1a:
+    Type: AWS::EC2::EIP
+    DependsOn: rInternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-NatGatewayEIP
+
+  rNatGateway1a:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      ConnectivityType: public
+      AllocationId: !GetAtt rElasticIpForNatGateway1a.AllocationId
+      SubnetId: !Ref rPublicSubnet1a
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-NatGateway
+
+  #-------------------------------------#
+  # RouteTables
+  #-------------------------------------#
+
+  # RouteTable for PrivateSubnet1a, PrivateSubnet1c
+  rRouteTableForPrivateSubnet1a:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-RouteTable-PrivateSubnet-1a
+
+  rRouteTableForPrivateSubnet1c:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-RouteTable-PrivateSubnet-1c
+
+  rRouteToNatGateway:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref rRouteTableForPrivateSubnet1a
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref rNatGateway1a
+
+  rRouteTableAssociationForPrivateSubnet1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref rPrivateSubnet1a
+      RouteTableId: !Ref rRouteTableForPrivateSubnet1a
+
+  rRouteTableAssociationForPrivateSubnet1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref rPrivateSubnet1c
+      RouteTableId: !Ref rRouteTableForPrivateSubnet1c
+
+  # RouteTable for PublicSubnet1a
+  rRouteTableForPublicSubnet1a:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-RouteTable-PublicSubnet-1a
+
+  rRouteToInternetGateway:
+    Type: AWS::EC2::Route
+    DependsOn: rInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref rRouteTableForPublicSubnet1a
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref rInternetGateway
+
+  rRouteTableAssociationForPublicSubnet1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref rPublicSubnet1a
+      RouteTableId: !Ref rRouteTableForPublicSubnet1a
+
+  #-------------------------------------#
+  # Security Group
+  #-------------------------------------#
+
+  # Security Group for Kafka Client Instance
+  rSGForKafkaClient:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${pSystemName}-SG-KafkaClient
+      GroupDescription: Security Group for Kafka Client Instance
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-SG-KafkaClient
+  
+  rSGRuleForKafkaClientEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref rSGForKafkaClient
+      IpProtocol: -1
+      CidrIp: 0.0.0.0/0
+      Description: Allow all outbound traffic
+
+  # Security Group for VPC Endpoint for SSM
+  rSGForVPCEndpointForSSM:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${pSystemName}-SG-VPCEndpoint-SSM
+      GroupDescription: Security Group for VPC Endpoint for SSM
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-SG-VPCEndpoint-SSM
+
+  rSGRuleForVPCEndpointForSSMIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rSGForVPCEndpointForSSM
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref rSGForKafkaClient
+      Description: Allow 443 inbound traffic from Kafka Client
+
+  # Security Group for Glue Job
+  rSGForGlueJob:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${pSystemName}-SG-GlueJob
+      GroupDescription: Security Group for Glue Streaming Job
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-SG-GlueJob
+
+  rSGRuleForGlueJobSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rSGForGlueJob
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref rSGForGlueJob
+      Description: Self-referencing rule required by Glue
+
+  rSGRuleForGlueJobEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref rSGForGlueJob
+      IpProtocol: -1
+      CidrIp: 0.0.0.0/0
+      Description: Allow all outbound traffic
+
+  # Security Group for VPC Endpoint for MSK Serverless
+  rSGForVPCEndpointForMSK:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${pSystemName}-SG-VPCEndpoint-MSK
+      GroupDescription: Security Group for VPC Endpoint for MSK Serverless
+      VpcId: !Ref rVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-SG-VPCEndpoint-MSK
+
+  rSGRuleForVPCEndpointForMSKIngressFromKafkaClient:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rSGForVPCEndpointForMSK
+      IpProtocol: tcp
+      FromPort: 9098
+      ToPort: 9098
+      SourceSecurityGroupId: !Ref rSGForKafkaClient
+      Description: Allow 9098 inbound traffic from Kafka Client
+
+  rSGRuleForVPCEndpointForMSKIngressFromGlue:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref rSGForVPCEndpointForMSK
+      IpProtocol: tcp
+      FromPort: 9098
+      ToPort: 9098
+      SourceSecurityGroupId: !Ref rSGForGlueJob
+      Description: Allow 9098 inbound traffic from Glue Job
+
+  #-------------------------------------#
+  # VPC Endpoints
+  #-------------------------------------#
+
+  rVPCEndpointForSSM:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref rVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref rPrivateSubnet1a
+      SecurityGroupIds:
+        - !Ref rSGForVPCEndpointForSSM
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-VpcEndpoint-SSM
+  
+  rVPCEndpointForSSMMessages:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref rVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref rPrivateSubnet1a
+      SecurityGroupIds:
+        - !Ref rSGForVPCEndpointForSSM
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-VpcEndpoint-SSMMessages
+
+########################################
+# Outputs
+########################################
+Outputs:
+
+  oVpcId:
+    Value: !Ref rVPC
+    Export:
+      Name: NetworkStack-VpcId
+
+  oPrivateSubnet1aId:
+    Value: !Ref rPrivateSubnet1a
+    Export:
+      Name: NetworkStack-PrivateSubnet1aId
+
+  oPrivateSubnet1cId:
+    Value: !Ref rPrivateSubnet1c
+    Export:
+      Name: NetworkStack-PrivateSubnet1cId
+
+  oPublicSubnet1aId:
+    Value: !Ref rPublicSubnet1a
+    Export:
+      Name: NetworkStack-PublicSubnet1aId
+
+  SGForKafkaClientId:
+    Value: !Ref rSGForKafkaClient
+    Export:
+      Name: NetworkStack-SGForKafkaClientId
+
+  SGForGlueJobId:
+    Value: !Ref rSGForGlueJob
+    Export:
+      Name: NetworkStack-SGForGlueJobId
+
+  SGForMSKServerlessId:
+    Value: !Ref rSGForVPCEndpointForMSK
+    Export:
+      Name: NetworkStack-SGForVPCEndpointForMSKId

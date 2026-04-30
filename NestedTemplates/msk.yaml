@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Kafka Client Instance for MSK Serverless Cluster
+
+########################################
+# Parameters
+########################################
+Parameters:
+
+  pSystemName:
+    Type: String
+
+  pInstanceType:
+    Type: String
+
+  pAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+########################################
+# Resources
+########################################
+Resources:
+
+  #-------------------------------------#
+  # IAM Policiy/Role and Instance Profile
+  #-------------------------------------#
+  rIAMPolicyForKafkaClient:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - kafka:*
+              - kafka-cluster:*
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  rIAMRoleForKafkaClient:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${pSystemName}-Role-KafkaClient
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Ref rIAMPolicyForKafkaClient
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-Role-KafkaClient
+
+  rIAMInstanceProfileForKafkaClient:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref rIAMRoleForKafkaClient
+
+  #-------------------------------------#
+  # Key Pair
+  #-------------------------------------#
+  rKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub ${pSystemName}-KeyPair-KafkaClient
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-KeyPair-KafkaClient
+
+  #-------------------------------------#
+  # EC2 Instance for MSK Client
+  #-------------------------------------#
+  rKafkaClientInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref pAmi
+      InstanceType: !Ref pInstanceType
+      SubnetId: !ImportValue NetworkStack-PrivateSubnet1aId
+      SecurityGroupIds:
+        - !ImportValue NetworkStack-SGForKafkaClientId
+      IamInstanceProfile: !Ref rIAMInstanceProfileForKafkaClient
+      KeyName: !Ref rKeyPair
+      Tags:
+        - Key: Name
+          Value: !Sub ${pSystemName}-KafkaClientInstance
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -e
+
+          ### Install Java 17
+          dnf install -y java-17-amazon-corretto-devel && echo 'Java 17 installed!!'
+
+          ### Install Kafka client tools
+          mkdir -p /opt/kafka && cd /opt/kafka
+          wget https://archive.apache.org/dist/kafka/2.8.1/kafka_2.12-2.8.1.tgz && echo 'Kafka client tools installed!!'
+          tar -xzf kafka_2.12-2.8.1.tgz
+          export KAFKA_PATH='/opt/kafka/kafka_2.12-2.8.1'
+
+          ### Download MSK IAM auth library
+          cd ${KAFKA_PATH}/libs
+          wget https://github.com/aws/aws-msk-iam-auth/releases/download/v2.3.0/aws-msk-iam-auth-2.3.0-all.jar && echo 'MSK IAM auth library downloaded!!'
+
+          ### Create client.properties
+          cat > ${KAFKA_PATH}/bin/client.properties << 'EOF'
+          security.protocol=SASL_SSL
+          sasl.mechanism=AWS_MSK_IAM
+          sasl.jaas.config=software.amazon.msk.auth.iam.IAMLoginModule required;
+          sasl.client.callback.handler.class=software.amazon.msk.auth.iam.IAMClientCallbackHandler
+          EOF
+
+  #-------------------------------------#
+  # MSK Serverless Cluster
+  #-------------------------------------#
+  MSKServerlessCluster:
+    Type: AWS::MSK::ServerlessCluster
+    Properties:
+      ClusterName: !Sub ${pSystemName}-msk-serverless-cluster
+      VpcConfigs:
+        - SubnetIds:
+            - !ImportValue NetworkStack-PrivateSubnet1aId
+            - !ImportValue NetworkStack-PrivateSubnet1cId
+          SecurityGroups:
+            - !ImportValue NetworkStack-SGForVPCEndpointForMSKId
+      ClientAuthentication:
+        Sasl:
+          Iam:
+            Enabled: true
+
+########################################
+# Outputs
+########################################
